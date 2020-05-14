@@ -175,13 +175,14 @@ func mkInitrd(version string, model *model.SystemInstall, options args.Args) err
 	return err
 }
 
-func mkInitrdInitScript(templatePath string) error {
+func mkInitrdInitScript(templatePath string, mediaCheck bool) error {
 	msg := "Creating and installing init script to initrd"
 	prg := progress.NewLoop(msg)
 	log.Info(msg)
 
 	type Modules struct {
-		Modules []string
+		Modules    []string
+		MediaCheck bool
 	}
 	mods := Modules{}
 
@@ -225,6 +226,11 @@ func mkInitrdInitScript(templatePath string) error {
 			return err
 		}
 		mods.Modules = append(mods.Modules, "/usr/lib/modules/"+kernelVersion+"."+kernelType+i)
+	}
+
+	// For ISO integrity check
+	if mediaCheck {
+		mods.MediaCheck = true
 	}
 
 	tmpl, err := ioutil.ReadFile(templatePath + "/initrd_init_template")
@@ -407,13 +413,14 @@ func mkEfiBoot() error {
 	return err
 }
 
-func mkLegacyBoot(templatePath string) error {
+func mkLegacyBoot(templatePath string, mediaCheck bool) error {
 	msg := "Setting up BIOS boot with isolinux"
 	prg := progress.NewLoop(msg)
 	log.Info(msg)
 
 	type BootConf struct {
-		Options string
+		Options           string
+		OptionsBootLegacy string
 	}
 	bc := BootConf{}
 
@@ -489,6 +496,12 @@ func mkLegacyBoot(templatePath string) error {
 	}
 	bc.Options = string(strings.Join(options, " "))
 
+	// For adding ISO Integrity
+	if mediaCheck {
+		optionsLegacy := append(options, "clri.mediacheck")
+		bc.OptionsBootLegacy = string(strings.Join(optionsLegacy, " "))
+	}
+
 	/* Fill boot options in isolinux.cfg */
 	tmpl, err := ioutil.ReadFile(templatePath + "/isolinux.cfg.template")
 	if err != nil {
@@ -519,6 +532,30 @@ func mkLegacyBoot(templatePath string) error {
 	if err != nil {
 		prg.Failure()
 		log.Error("Failed to execute template filling")
+		return err
+	}
+
+	prg.Success()
+	return err
+}
+
+func implantIsoChecksum(imgName string) error {
+	msg := "Adding Checksums for ISO Integrity"
+	prg := progress.NewLoop(msg)
+	log.Info(msg)
+
+	args := []string{
+		"implantiso",
+	}
+
+	if len(imgName) > 0 {
+		isoName := imgName + ".iso"
+		args = append(args, isoName)
+	}
+
+	err := cmd.RunAndLog(args...)
+	if err != nil {
+		prg.Failure()
 		return err
 	}
 
@@ -615,7 +652,7 @@ func MakeIso(rootDir string, imgName string, model *model.SystemInstall, options
 		return err
 	}
 
-	if err = mkInitrdInitScript(templateDir); err != nil {
+	if err = mkInitrdInitScript(templateDir, options.MediaCheck); err != nil {
 		return err
 	}
 
@@ -627,7 +664,7 @@ func MakeIso(rootDir string, imgName string, model *model.SystemInstall, options
 		return err
 	}
 
-	err = mkLegacyBoot(templateDir)
+	err = mkLegacyBoot(templateDir, options.MediaCheck)
 	if err != nil {
 		return err
 	}
@@ -641,6 +678,10 @@ func MakeIso(rootDir string, imgName string, model *model.SystemInstall, options
 	}
 
 	if err = packageIso(imgName, appID, model.ISOPublisher); err != nil {
+		return err
+	}
+
+	if err = implantIsoChecksum(imgName); err != nil {
 		return err
 	}
 

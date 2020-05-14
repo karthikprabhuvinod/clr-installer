@@ -104,6 +104,16 @@ mount_root() {
     fi
 }
 
+# Check ISO media integrity
+verify_media() {
+    local need="ISO integrity check"
+    echo_tty_kmsg "Verifying media"
+    local installer=$(blkid -L CLR_ISO)
+
+    checkisomd5 --verbose --gauge ${installer}
+    check_result "$?" "$need"
+}
+
 # Finds the installer media and calls mount_root if successful
 find_and_mount_installer() {
     local retries=0
@@ -151,6 +161,12 @@ main() {
     have_sse41_cpu_feature
     have_sse42_cpu_feature
     have_pclmul_cpu_feature
+
+    # ISO media integrity check
+    {{if .MediaCheck}}
+    verify_media
+    {{end}}
+
     echo_tty_kmsg "[${SUCCESS}  OK  ${NORMAL}] All checks passed."
 
     # insmod required modules
