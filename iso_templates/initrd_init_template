@@ -13,7 +13,7 @@ INFO="\\033[1;36m"           # light cyan
 # $1 - Message string to print
 # Explicitly send boot messages to tty0, /dev/console is ttyS0
 echo_tty_kmsg() {
-    echo -e "$1" > /dev/tty0
+    echo -e "$1" > /dev/console
     echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g' > /dev/kmsg
 }
 
@@ -104,6 +104,33 @@ mount_root() {
     fi
 }
 
+wait_for_keystrokes() {
+    while [ true ] ; do
+        read -t 2 -n 1
+        if [ "$?" = 0 ] ; then
+            break
+        fi
+    done
+}
+
+check_iso_verify() {
+    local ret="$1"
+    local msg="$2"
+    [ "$ret" -ne 0 ] && { echo_tty_kmsg "[${FAILURE} FAIL ${NORMAL}] $msg: Press any key to reboot your system"; }
+    [ "$ret" -eq 0 ] && { echo_tty_kmsg "[${SUCCESS}  OK  ${NORMAL}] $msg: Press any key to reboot your system"; }
+
+    wait_for_keystrokes
+}
+
+# Check ISO media integrity
+verify_media() {
+    local need="ISO integrity check"
+    local installer=$(blkid -L CLR_ISO) 
+
+    checkisomd5 --verbose --gauge ${installer}
+    check_iso_verify "$?" "$need"
+}
+
 # Finds the installer media and calls mount_root if successful
 find_and_mount_installer() {
     local retries=0
@@ -136,6 +163,17 @@ overlay_and_switch() {
     exec switch_root /mnt/ramfs/rw_root /sbin/init
 }
 
+check_kernel_cmdline_contains() {
+    local optioncheck=${1}
+    local kernelcmdline=$(cat /proc/cmdline)
+    for option in $kernelcmdline; do
+        if [ "$option" == "$optioncheck" ]; then
+          return 0
+        fi
+    done
+    return -1
+}
+
 main() {
     # Mount temp filesystem
     mount -t proc none /proc
@@ -151,7 +189,14 @@ main() {
     have_sse41_cpu_feature
     have_sse42_cpu_feature
     have_pclmul_cpu_feature
+
     echo_tty_kmsg "[${SUCCESS}  OK  ${NORMAL}] All checks passed."
+
+    # ISO media integrity check
+    if check_kernel_cmdline_contains "clri.checkmedia"; then
+        echo_tty_kmsg "Starting ISO integrity check..."
+        verify_media
+    fi
 
     # insmod required modules
     {{range .Modules}}

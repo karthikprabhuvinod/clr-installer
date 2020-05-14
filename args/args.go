@@ -33,6 +33,7 @@ const (
 	kernelCmdlineDemo         = "clri.demo"
 	kernelCmdlineLog          = "clri.loglevel"
 	kernelCmdlineHighContrast = "clri.hc"
+	kernelMediaCheck          = "clri.mediacheck"
 	logFileEnvironVar         = "CLR_INSTALLER_LOG_FILE"
 )
 
@@ -100,6 +101,7 @@ type Args struct {
 	SkipValidationAllSet    bool
 	SwapFileSize            string
 	ForceDestructive        bool
+	MediaCheck              bool
 }
 
 func (args *Args) setKernelArgs() (err error) {
@@ -121,6 +123,8 @@ func (args *Args) setKernelArgs() (err error) {
 			args.DemoMode = true
 		} else if strings.HasPrefix(curr, kernelCmdlineHighContrast) {
 			args.HighContrast = true
+		} else if strings.HasPrefix(curr, kernelMediaCheck) {
+			args.MediaCheck = true
 		} else if strings.HasPrefix(curr, kernelCmdlineLog) {
 			logLevelString := strings.Split(curr, "=")[1]
 			if logLevel, _ := strconv.Atoi(logLevelString); err != nil {

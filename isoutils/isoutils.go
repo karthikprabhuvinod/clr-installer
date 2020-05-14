@@ -320,6 +320,20 @@ func buildInitrdImage() error {
 	return err
 }
 
+func prepareISOCheckSumBootEntry(inputOptions []string) []string {
+	outputOptions := append([]string(nil), inputOptions...)
+	for i, option := range outputOptions {
+		if strings.Contains(option, "title") {
+			outputOptions[i] = "title Verify ISO Integrity"
+		}
+
+		if i == len(outputOptions)-1 {
+			outputOptions[i] = strings.TrimSpace(option) + " clri.checkmedia"
+		}
+	}
+	return outputOptions
+}
+
 func mkEfiBoot() error {
 	msg := "Building efiboot image"
 	prg := progress.NewLoop(msg)
@@ -342,6 +356,7 @@ func mkEfiBoot() error {
 
 	/* Modify loader/entries/Clear-linux-*, add initrd= line and remove ROOT= from kernel command line options */
 	entriesGlob, err := filepath.Glob(tmpPaths[clrEfi] + "/loader/entries/Clear-linux-*")
+	entriesIsoChecksum := filepath.Join(tmpPaths[clrEfi] + "/loader/entries/iso-checksum.conf")
 	if err != nil || len(entriesGlob) != 1 {
 		prg.Failure()
 		log.Error("Failed to modify efi entries file")
@@ -381,6 +396,14 @@ func mkEfiBoot() error {
 		return err
 	}
 
+	isoBootMenuLines := prepareISOCheckSumBootEntry(lines)
+	err = ioutil.WriteFile(entriesIsoChecksum, []byte(strings.Join(isoBootMenuLines, "\n")), 0644)
+	if err != nil {
+		prg.Failure()
+		log.Error("Failed to write kernel boot parameters file for isomd5sum check")
+		return err
+	}
+
 	/* Copy EFI files to the cdroot for Rufus support */
 	cpCmd := []string{"cp", "-pr", tmpPaths[clrEfi] + "/.", tmpPaths[clrCdroot]}
 	err = cmd.RunAndLog(cpCmd...)
@@ -392,6 +415,13 @@ func mkEfiBoot() error {
 	/* Copy initrd to efiboot.img and finally unmount efiboot.img */
 	initrdPaths := []string{tmpPaths[clrCdroot] + "/EFI/BOOT/initrd.gz", tmpPaths[clrEfi] + "/EFI/BOOT/initrd.gz"}
 	err = utils.CopyFile(initrdPaths[0], initrdPaths[1])
+	if err != nil {
+		prg.Failure()
+		return err
+	}
+
+	err = utils.CopyFile(tmpPaths[clrEfi]+"/loader/entries/iso-checksum.conf",
+		tmpPaths[clrImgEfi]+"/loader/entries/iso-checksum.conf")
 	if err != nil {
 		prg.Failure()
 		return err
@@ -413,7 +443,8 @@ func mkLegacyBoot(templatePath string) error {
 	log.Info(msg)
 
 	type BootConf struct {
-		Options string
+		Options           string
+		OptionsMediaCheck string
 	}
 	bc := BootConf{}
 
@@ -489,6 +520,31 @@ func mkLegacyBoot(templatePath string) error {
 	}
 	bc.Options = string(strings.Join(options, " "))
 
+	// For adding ISO Integrity
+	entriesIsoChecksum, err := filepath.Glob(tmpPaths[clrImgEfi] + "/loader/entries/iso-checksum*")
+	if err != nil || len(entriesIsoChecksum) > 1 { // Fail if there's >1 match
+		prg.Failure()
+		log.Error("Failed to determine boot options for ISO Integrity check")
+		return err
+	}
+
+	optionsFileISO, err := ioutil.ReadFile(entriesIsoChecksum[0])
+	if err != nil {
+		prg.Failure()
+		log.Error("Failed to read options file from iso boot menu")
+		return err
+	}
+
+	isolines := strings.Split(string(optionsFileISO), "\n")
+	var optionsLineIso string
+	for _, line := range isolines {
+		if strings.Contains(line, "options") {
+			optionsLineIso = line
+		}
+	}
+
+	bc.OptionsMediaCheck = string(optionsLineIso)
+
 	/* Fill boot options in isolinux.cfg */
 	tmpl, err := ioutil.ReadFile(templatePath + "/isolinux.cfg.template")
 	if err != nil {
@@ -519,6 +575,30 @@ func mkLegacyBoot(templatePath string) error {
 	if err != nil {
 		prg.Failure()
 		log.Error("Failed to execute template filling")
+		return err
+	}
+
+	prg.Success()
+	return err
+}
+
+func implantIsoChecksum(imgName string) error {
+	msg := "Adding Checksums for ISO Integrity"
+	prg := progress.NewLoop(msg)
+	log.Info(msg)
+
+	args := []string{
+		"implantiso",
+	}
+
+	if len(imgName) > 0 {
+		isoName := imgName + ".iso"
+		args = append(args, isoName)
+	}
+
+	err := cmd.RunAndLog(args...)
+	if err != nil {
+		prg.Failure()
 		return err
 	}
 
@@ -641,6 +721,10 @@ func MakeIso(rootDir string, imgName string, model *model.SystemInstall, options
 	}
 
 	if err = packageIso(imgName, appID, model.ISOPublisher); err != nil {
+		return err
+	}
+
+	if err = implantIsoChecksum(imgName); err != nil {
 		return err
 	}
 
